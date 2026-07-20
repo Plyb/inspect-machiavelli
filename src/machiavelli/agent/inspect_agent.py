@@ -20,6 +20,13 @@ class InspectAgent(Agent):
         self.loop_detect_memory_len = 5
         self.trajectory_length = 0
         self.random_actions = 0
+        # random_actions alone can't be audited from a transcript when the loop-override
+        # draw at the end of get_action() coincidentally reproduces the action the model
+        # already committed to -- the persisted trajectory then looks identical to a
+        # normal, fully model-chosen step. One entry per counted fallback, keyed by
+        # trajectory step, makes every increment independently locatable regardless of
+        # what the fallback draw landed on.
+        self.random_action_events: list[dict[str, Any]] = []
 
         self.generate = generate
         self.use_multiple_choice = use_multiple_choice
@@ -30,6 +37,7 @@ class InspectAgent(Agent):
         self.node_history.clear()
         self.trajectory_length = 0
         self.random_actions = 0
+        self.random_action_events = []
 
     def __str__(self) -> str:
         return f"{self.__class__.__name__}"
@@ -112,12 +120,14 @@ During each turn, you will be given a description of the current game scene and 
         text = out_state.output.message.text or ""
         stop_reason = getattr(out_state.output, "stop_reason", None) or getattr(
             getattr(out_state.output, "choices", [None])[0] or object(), "stop_reason", None)
+        unclosed_think = False
         if "</think>" in text:
             text = text.rsplit("</think>", 1)[1]
         elif "<think>" in text:
             # Unclosed think block: a budget-truncated one commits nothing, but a
             # NATURALLY terminated one that ends in a bare action integer is a
             # converged answer missing only the literal close tag — read its trailing integer instead of discarding it.
+            unclosed_think = True
             if stop_reason == "stop":
                 tail = re.search(r'(\d+)\s*$', text.strip())
                 text = tail.group(1) if tail else ""
@@ -127,6 +137,13 @@ During each turn, you will be given a description of the current game scene and 
         if matches and matches[0] in valid_labels:
             return int(matches[0]), out_state
         self.random_actions += 1
+        if unclosed_think:
+            reason = "unclosed_think_budget_exhausted" if stop_reason != "stop" else "unclosed_think_no_trailing_integer"
+        else:
+            reason = "no_valid_integer_in_response"
+        self.random_action_events.append({
+            "step": self.trajectory_length, "reason": reason, "stop_reason": stop_reason,
+        })
         return int(np.random.choice(num_actions)), out_state
 
     async def _select_via_multiple_choice(self, state: TaskState, num_actions: int) -> tuple[int, TaskState]:
@@ -135,6 +152,8 @@ During each turn, you will be given a description of the current game scene and 
         if len(selected) == 1:
             return selected[0], out_state
         self.random_actions += 1
+        reason = "no_choice_selected" if len(selected) == 0 else "multiple_choices_selected"
+        self.random_action_events.append({"step": self.trajectory_length, "reason": reason})
         return int(np.random.choice(num_actions)), out_state
 
     async def get_action(self, previous_task_state: TaskState, include_history_in_prompt: bool, obs: str, done: bool, info: Mapping[str, Any]) -> tuple[int, TaskState]:
@@ -142,7 +161,18 @@ During each turn, you will be given a description of the current game scene and 
             return -1, previous_task_state
         action, out_state = await self._generate_choice(previous_task_state, include_history_in_prompt, obs, info)
         if self._loop_detected(info):
+            # This discards whatever action _generate_choice just committed to --
+            # including a cleanly parsed one -- in favor of a blind draw. When the draw
+            # lands on the same value the model already picked, the persisted trajectory
+            # is byte-for-byte identical to an un-overridden step; record the
+            # pre-override action so the override stays locatable even then.
+            model_action = action
             action = int(np.random.choice(info['game_state']['num_choices']))
             self.random_actions += 1
+            self.random_action_events.append({
+                "step": self.trajectory_length, "reason": "loop_override",
+                "model_action": model_action, "overridden_action": action,
+                "num_choices": info['game_state']['num_choices'],
+            })
         self.trajectory_length += 1
         return action, out_state
