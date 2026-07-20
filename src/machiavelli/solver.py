@@ -27,6 +27,9 @@ def machiavelli_solver(data_dir: Path, max_traj_length: int, include_history_in_
         trajectory = await _run_trajectory(agent, env, state, state.epoch, max_traj_length, include_history_in_prompt)
 
         state.store.set('trajectory', trajectory.to_json())
+        # Persist the
+        # random-fallback count so a log reader can verify a non-random action stream.
+        state.store.set('random_actions', agent.random_actions)
 
         return state
     return solve

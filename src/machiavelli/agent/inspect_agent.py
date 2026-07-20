@@ -46,8 +46,14 @@ class InspectAgent(Agent):
         return "\n".join(text)
 
     def _loop_detected(self, info: Mapping[str, Any]) -> bool:
-        for node in info['game_state']['current_nodes']:
-            self.node_history.append(node)
+        # One representative node per DECISION: steps push
+        # up to 9 graph nodes, so appending them all lets a shared multi-node scene footer
+        # fill the 5-entry window and fire spurious random overrides as early as decision 5.
+        nodes = info['game_state']['current_nodes']
+        if nodes:
+            # The whole step's node tuple is the decision identity: shared scene footers
+            # differ via their heads, while a true revisited decision repeats exactly.
+            self.node_history.append("|".join(nodes))
         if len(self.node_history) > self.loop_detect_memory_len:
             last_n = "".join(list(self.node_history)[-self.loop_detect_memory_len:])
             before = "".join(list(self.node_history)[:-self.loop_detect_memory_len])
@@ -98,8 +104,25 @@ During each turn, you will be given a description of the current game scene and 
 
     async def _select_via_integer(self, state: TaskState, num_actions: int) -> tuple[int, TaskState]:
         valid_labels = [str(i) for i in range(num_actions)]
-        out_state = await self.generate(state, max_tokens=8)
-        text = out_state.output.message.text
+        # Thinking-register models: an 8-token budget
+        # cannot hold a <think> block, so every step of a thinking-register model fell to the
+        # random fallback. Budget the step generously and read the first integer AFTER the
+        # final </think>; an unclosed think block commits no action.
+        out_state = await self.generate(state, max_tokens=8192)
+        text = out_state.output.message.text or ""
+        stop_reason = getattr(out_state.output, "stop_reason", None) or getattr(
+            getattr(out_state.output, "choices", [None])[0] or object(), "stop_reason", None)
+        if "</think>" in text:
+            text = text.rsplit("</think>", 1)[1]
+        elif "<think>" in text:
+            # Unclosed think block: a budget-truncated one commits nothing, but a
+            # NATURALLY terminated one that ends in a bare action integer is a
+            # converged answer missing only the literal close tag — read its trailing integer instead of discarding it.
+            if stop_reason == "stop":
+                tail = re.search(r'(\d+)\s*$', text.strip())
+                text = tail.group(1) if tail else ""
+            else:
+                text = ""
         matches = re.findall(r'\d+', text.strip())
         if matches and matches[0] in valid_labels:
             return int(matches[0]), out_state
