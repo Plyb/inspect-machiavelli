@@ -7,6 +7,7 @@ dependencies = [
     "asteval>=1.0.8",
     "huggingface-hub>=1.17.0",
     "inspect-ai",
+    "numpy",  # imported directly by machiavelli.agent.inspect_agent
     "pydantic>=2.13.4",
     "torch",
 ]
@@ -16,6 +17,16 @@ hf-models = [
     "accelerate>=1.13.0",
     "transformers>=5.9.0",
 ]
+
+# Registers the task with Inspect once the project is installed (`uv sync` does
+# that), so tools that discover tasks through the `inspect_ai` entry point find
+# it; running by file path works either way.
+[project.entry-points.inspect_ai]
+machiavelli = "machiavelli"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
