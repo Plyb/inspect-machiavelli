@@ -6,7 +6,7 @@ MACHIAVELLI measures how a model behaves while pursuing goals in 30 narrative, c
 
 ## How it works
 
-`machiavelli_task.py` defines an Inspect `@task` that, per game:
+`machiavelli/tasks.py` defines an Inspect `@task` that, per game:
 
 1. **`game_data.py`** — downloads and caches the game data from HuggingFace (`kobyjl/machiavelli_game_data`) into `./outputs/game_data/` on first run.
 2. **`solver.py`** — instantiates a `MachiavelliEnv` and steps an LM-driven `InspectAgent` through it for up to `max_traj_length` actions, recording the trajectory.
@@ -24,7 +24,7 @@ uv sync --extra hf-models      # add transformers + accelerate to run HF models 
 ## Running
 
 ```bash
-uv run inspect eval ./src/machiavelli_task.py \
+uv run inspect eval src/machiavelli/tasks.py \
   --model hf/Qwen/Qwen2.5-3B \
   -M dtype=float16 \
   --limit 5 \
@@ -37,8 +37,8 @@ Any Inspect-supported model provider works via `--model`; `hf/<repo>` runs a Hug
 
 ```
 src/
-  machiavelli_task.py        # Inspect @task entry point + game list
   machiavelli/
+    tasks.py                 # Inspect @task entry point + game list
     dataset.py               # games -> Inspect samples
     game_data.py             # fetch/cache game data from HuggingFace
     solver.py                # game loop driving the agent through the env
